@@ -1,0 +1,65 @@
+// SPDX-License-Identifier: GPL-3.0-only
+import { test, expect, _electron as electron } from '@playwright/test';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+
+test('imports a piece, edits it, saves a project and exports a GLB', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(),'naja-e2e-'));
+  const folder = path.join(temp,'assets');
+  await mkdir(folder);
+  await writeFile(path.join(folder,'triangle.obj'),'v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n');
+  const config = path.join(temp,'config','naja-3d-map-construct');
+  await mkdir(config,{recursive:true}); await writeFile(path.join(config,'render-mode.json'),'{"mode":"cpu"}');
+  const launch = () => electron.launch({args:['.','--no-sandbox'],cwd:process.cwd(),env:{...process.env,XDG_CONFIG_HOME:path.join(temp,'config'),LANG:'en_US.UTF-8'}});
+  let app = await launch();
+  try {
+    await app.evaluate(({ session }, dir) => { session.defaultSession.on('will-download', (_event, item) => { item.setSavePath(`${dir}/${item.getFilename()}`); }); }, temp);
+    const page = await app.firstWindow();
+    await page.locator('.language select').selectOption('en');
+    await page.locator('input[webkitdirectory]').setInputFiles(folder);
+    await expect(page.locator('.asset-card')).toHaveCount(1);
+    await page.locator('.asset-card').dragTo(page.locator('canvas'));
+    await expect(page.locator('.selected-name')).toHaveText('triangle.obj');
+    const before = await page.getByLabel('Position (m) X',{exact:true}).inputValue();
+    const label = page.getByRole('button',{name:'Drag to change value Position (m) X'});
+    const bounds = await label.boundingBox(); if (!bounds) throw new Error('Axis label not visible');
+    await page.mouse.move(bounds.x+bounds.width/2,bounds.y+bounds.height/2); await page.mouse.down(); await page.mouse.move(bounds.x+bounds.width/2+20,bounds.y+bounds.height/2,{steps:4}); await page.mouse.up();
+    await expect(page.getByLabel('Position (m) X',{exact:true})).toHaveValue('0.200');
+    await page.getByRole('button',{name:'Undo',exact:true}).click(); await expect(page.getByLabel('Position (m) X',{exact:true})).toHaveValue(before);
+    await page.getByLabel('Position (m) X',{exact:true}).fill('2');
+    await page.getByLabel('Position (m) X',{exact:true}).dispatchEvent('change');
+    await page.getByRole('button',{name:'Undo',exact:true}).click(); await expect(page.getByLabel('Position (m) X',{exact:true})).toHaveValue(before);
+    await page.getByRole('button',{name:'Redo',exact:true}).click(); await expect(page.getByLabel('Position (m) X',{exact:true})).toHaveValue('2.000');
+    await page.locator('.collision-label select').selectOption('box');
+    await page.locator('input[accept="image/*"]').first().setInputFiles({name:'red.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR4nGP4z8DwH4QZYAwAR8oH+WdZbrcAAAAASUVORK5CYII=','base64')});
+    await expect(page.locator('.texture-status')).toHaveText('Texture applied.');
+    await page.getByRole('button',{name:'Save',exact:true}).click();
+    const projectPath = path.join(temp,'mapa.naja');
+    await expect.poll(async () => { try { return (await readFile(projectPath)).length; } catch { return 0; } }).toBeGreaterThan(0);
+    const project = JSON.parse((await readFile(projectPath)).toString());
+    expect(project.pieces[0].position[0]).toBe(2);
+    expect(project.pieces[0].collision).toBe('box');
+    expect(project.pieces[0].textures.map).toMatch(/^data:image\/png;base64,/);
+    await page.getByRole('button',{name:'Export GLB',exact:true}).click();
+    await page.locator('.modal .primary-button').click();
+    const glbPath = path.join(temp,'mapa.glb');
+    await expect.poll(async () => { try { return (await readFile(glbPath)).length; } catch { return 0; } }).toBeGreaterThan(0);
+    const glb = await readFile(glbPath);
+    expect(glb.readUInt32LE(0)).toBe(0x46546c67);
+    const json = JSON.parse(glb.subarray(20,20+glb.readUInt32LE(12)).toString());
+    expect(json.nodes.some((node: {name?: string}) => node.name?.endsWith('-convcolonly'))).toBe(true);
+    expect(json.images).toHaveLength(1);
+    await app.close(); app = await launch();
+    await app.evaluate(({ session }, dir) => { session.defaultSession.on('will-download', (_event, item) => { item.setSavePath(`${dir}/${item.getFilename()}`); }); }, temp);
+    const reopened = await app.firstWindow(); await reopened.locator('.language select').selectOption('en');
+    await reopened.locator('input[accept=".naja,application/json"]').setInputFiles(projectPath);
+    await expect(reopened.locator('.status')).toContainText('1 pieces');
+    await rm(glbPath); await reopened.getByRole('button',{name:'Export GLB',exact:true}).click(); await reopened.locator('.modal .primary-button').click();
+    await expect.poll(async () => { try { return (await readFile(glbPath)).length; } catch { return 0; } }).toBeGreaterThan(0);
+    const reopenedGlb=await readFile(glbPath); const reopenedJson=JSON.parse(reopenedGlb.subarray(20,20+reopenedGlb.readUInt32LE(12)).toString());
+    expect(reopenedJson.nodes.some((node: {translation?: number[]; matrix?: number[]}) => node.translation?.[0] === 2 || node.matrix?.[12] === 2)).toBe(true);
+    expect(reopenedJson.nodes.some((node: {name?: string}) => node.name?.endsWith('-convcolonly'))).toBe(true);
+    expect(reopenedJson.images).toHaveLength(1);
+  } finally { const child=app.process(); await app.evaluate(({ app: electronApp }) => electronApp.exit(0)).catch(() => {}); if (child.exitCode === null && child.signalCode === null) await new Promise<void>(resolve => { child.once('exit',()=>resolve()); setTimeout(()=>{ child.kill('SIGKILL'); resolve(); },5000).unref(); }); await rm(temp,{recursive:true,force:true,maxRetries:5,retryDelay:200}); }
+});
