@@ -1,0 +1,59 @@
+{
+  "name": "naja-3d-map-construct",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-only",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:127.0.0.1:5173 && electron .\"",
+    "dev:web": "vite --host 0.0.0.0",
+    "build": "svelte-check --tsconfig ./tsconfig.json && vite build",
+    "lint": "svelte-check --tsconfig ./tsconfig.json && tsc --noEmit",
+    "test": "vitest run tests/*.test.ts",
+    "dist": "npm run build && electron-builder --linux AppImage",
+    "test:e2e": "xvfb-run -a playwright test"
+  },
+  "dependencies": {
+    "@fontsource/inter": "^5.2.8",
+    "@fontsource/jetbrains-mono": "^5.2.8",
+    "@fontsource/space-grotesk": "^5.2.8",
+    "i18next": "^25.6.3",
+    "lucide-svelte": "^0.468.0",
+    "svelte": "^5.43.0",
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@sveltejs/vite-plugin-svelte": "^6.2.1",
+    "@tsconfig/svelte": "^5.0.5",
+    "@types/three": "^0.187.0",
+    "concurrently": "^9.2.1",
+    "electron": "^45.2.1",
+    "electron-builder": "^26.0.12",
+    "svelte-check": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.2",
+    "vitest": "^5.0.5",
+    "wait-on": "^9.0.3"
+  },
+  "build": {
+    "appId": "org.versallesrpg.naja",
+    "productName": "NAJA 3D Map Construct",
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json",
+      "LICENSE",
+      "THIRD_PARTY_LICENSES.md"
+    ],
+    "linux": {
+      "target": "AppImage",
+      "category": "Graphics",
+      "icon": "build/icon.png"
+    },
+    "directories": {
+      "output": "release"
+    }
+  }
+}
